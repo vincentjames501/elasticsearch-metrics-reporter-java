@@ -60,7 +60,7 @@ public class ElasticsearchReporter extends ScheduledReporter {
         private TimeUnit rateUnit;
         private TimeUnit durationUnit;
         private MetricFilter filter;
-        private String[] hosts = new String[]{ "localhost:9200" };
+        private String[] hosts = new String[]{"localhost:9200"};
         private String index = "metrics";
         private String indexDateFormat = "yyyy-MM";
         private int bulkSize = 2500;
@@ -69,6 +69,8 @@ public class ElasticsearchReporter extends ScheduledReporter {
         private int timeout = 1000;
         private String timestampFieldname = "@timestamp";
         private Map<String, Object> additionalFields;
+        private String userName;
+        private String password;
         private boolean dynamicValueFieldname = false;
 
         private Builder(MetricRegistry registry) {
@@ -123,12 +125,22 @@ public class ElasticsearchReporter extends ScheduledReporter {
         /**
          * Configure an array of hosts to send data to.
          * Note: Data is always sent to only one host, but this makes sure, that even if a part of your elasticsearch cluster
-         *       is not running, reporting still happens
+         * is not running, reporting still happens
          * A host must be in the format hostname:port
          * The port must be the HTTP port of your elasticsearch instance
          */
-        public Builder hosts(String ... hosts) {
+        public Builder hosts(String... hosts) {
             this.hosts = hosts;
+            return this;
+        }
+
+        public Builder userName(String userName) {
+            this.userName = userName;
+            return this;
+        }
+
+        public Builder password(String password) {
+            this.password = password;
             return this;
         }
 
@@ -191,6 +203,7 @@ public class ElasticsearchReporter extends ScheduledReporter {
 
         /**
          * Additional fields to be included for each metric
+         *
          * @param additionalFields
          * @return
          */
@@ -202,17 +215,20 @@ public class ElasticsearchReporter extends ScheduledReporter {
         /**
          * Whether the fieldname for "value" should depend on the value type or not. Defaults to <code>false</code>.
          * When set to <code>true</code>, the fieldname for value will be "value_string", "value_long" etc.
+         *
          * @param dynamicValueFieldname
          * @return
          */
         public Builder dynamicValueFieldname(boolean dynamicValueFieldname) {
-			this.dynamicValueFieldname = dynamicValueFieldname;
-			return this;
-		}
+            this.dynamicValueFieldname = dynamicValueFieldname;
+            return this;
+        }
 
-		public ElasticsearchReporter build() throws IOException {
+        public ElasticsearchReporter build() throws IOException {
             return new ElasticsearchReporter(registry,
                     hosts,
+                    userName,
+                    password,
                     timeout,
                     index,
                     indexDateFormat,
@@ -245,12 +261,16 @@ public class ElasticsearchReporter extends ScheduledReporter {
     private String currentIndexName;
     private SimpleDateFormat indexDateFormat = null;
     private boolean checkedForIndexTemplate = false;
+    private String userName;
+    private String password;
 
-    public ElasticsearchReporter(MetricRegistry registry, String[] hosts, int timeout,
+    public ElasticsearchReporter(MetricRegistry registry, String[] hosts, String userName, String password, int timeout,
                                  String index, String indexDateFormat, int bulkSize, Clock clock, String prefix, TimeUnit rateUnit, TimeUnit durationUnit,
                                  MetricFilter filter, MetricFilter percolationFilter, Notifier percolationNotifier, String timestampFieldname, Map<String, Object> additionalFields, boolean dynamicValueFieldname) throws MalformedURLException {
         super(registry, "elasticsearch-reporter", filter, rateUnit, durationUnit);
         this.hosts = hosts;
+        this.userName = userName;
+        this.password = password;
         this.index = index;
         this.bulkSize = bulkSize;
         this.clock = clock;
@@ -355,7 +375,7 @@ public class ElasticsearchReporter extends ScheduledReporter {
                     }
                 }
             }
-        // catch the exception to make sure we do not interrupt the live application
+            // catch the exception to make sure we do not interrupt the live application
         } catch (IOException e) {
             LOGGER.error("Couldnt report to elasticsearch server", e);
         }
@@ -463,11 +483,16 @@ public class ElasticsearchReporter extends ScheduledReporter {
     private HttpURLConnection openConnection(String uri, String method) {
         for (String host : hosts) {
             try {
-                URL templateUrl = new URL("http://" + host  + uri);
-                HttpURLConnection connection = ( HttpURLConnection ) templateUrl.openConnection();
+                URL templateUrl = new URL("http://" + host + uri);
+                HttpURLConnection connection = (HttpURLConnection) templateUrl.openConnection();
                 connection.setRequestMethod(method);
                 connection.setConnectTimeout(timeout);
                 connection.setUseCaches(false);
+                if (userName != null && password != null) {
+                    byte[] encodedPassword = (userName + ":" + password).getBytes();
+                    connection.setRequestProperty("Authorization",
+                            "Basic " + Base64.getEncoder().encodeToString(encodedPassword));
+                }
                 if (method.equalsIgnoreCase("POST") || method.equalsIgnoreCase("PUT")) {
                     connection.setDoOutput(true);
                 }
@@ -488,7 +513,7 @@ public class ElasticsearchReporter extends ScheduledReporter {
      */
     private void checkForIndexTemplate() {
         try {
-            HttpURLConnection connection = openConnection( "/_template/metrics_template", "HEAD");
+            HttpURLConnection connection = openConnection("/_template/metrics_template", "HEAD");
             if (connection == null) {
                 LOGGER.error("Could not connect to any configured elasticsearch instances: {}", Arrays.asList(hosts));
                 return;
@@ -500,8 +525,8 @@ public class ElasticsearchReporter extends ScheduledReporter {
             // nothing there, lets create it
             if (isTemplateMissing) {
                 LOGGER.debug("No metrics template found in elasticsearch. Adding...");
-                HttpURLConnection putTemplateConnection = openConnection( "/_template/metrics_template", "PUT");
-                if(putTemplateConnection == null) {
+                HttpURLConnection putTemplateConnection = openConnection("/_template/metrics_template", "PUT");
+                if (putTemplateConnection == null) {
                     LOGGER.error("Error adding metrics template to elasticsearch");
                     return;
                 }
@@ -530,7 +555,7 @@ public class ElasticsearchReporter extends ScheduledReporter {
                 json.writeEndObject();
                 json.writeEndObject();
                 json.writeEndObject();
-                
+
                 json.writeObjectFieldStart("gauge");
                 json.writeObjectFieldStart("properties");
                 json.writeObjectFieldStart("value_string");
@@ -538,7 +563,7 @@ public class ElasticsearchReporter extends ScheduledReporter {
                 json.writeObjectField("index", "not_analyzed");
                 json.writeEndObject();
                 json.writeEndObject();
-                json.writeEndObject();                
+                json.writeEndObject();
 
                 json.writeEndObject();
                 json.writeEndObject();
